@@ -12,6 +12,7 @@
     .required::after { content: " *"; color: #d63384; font-weight: 700; }
     .table thead th { white-space: nowrap; }
     .small-muted { font-size: .9rem; color:#6c757d }
+    .cursor-pointer { cursor: pointer; }
   </style>
 </head>
 <body>
@@ -21,7 +22,7 @@
         <i class="bi bi-people-fill fs-3 text-primary"></i>
         <div>
           <h1 class="h3 m-0">Registro de Votantes</h1>
-          <div class="small-muted">Campos: <strong>Nombre</strong>, <strong>Cédula</strong>, <strong>Teléfono</strong>, <strong>Municipio</strong>. (Versión frontend local)</div>
+          <div class="small-muted">Campos: <strong>Nombre</strong>, <strong>Cédula</strong>, <strong>Teléfono</strong>, <strong>Municipio</strong>. (Conexión a API)</div>
         </div>
       </div>
       <div class="d-flex align-items-center gap-2">
@@ -120,7 +121,7 @@
         <div class="modal-body">
           <label class="form-label" for="admin-pass">Contraseña</label>
           <input id="admin-pass" type="password" class="form-control" placeholder="Ingresa la contraseña" />
-          <div class="form-text">* Cámbiala cuando pasemos a servidor.</div>
+          <div class="form-text">* La verificaremos contra el servidor.</div>
         </div>
         <div class="modal-footer">
           <button class="btn btn-secondary" data-bs-dismiss="modal">Cancelar</button>
@@ -131,31 +132,71 @@
   </div>
 
   <script>
-    const STORAGE_KEY = 'rvoters:v1';
-    let isAdmin = false;
+    // ===== CONFIG =====
+    const API_BASE = 'https://TU_API_BASE.onrender.com'; // ← reemplaza por tu dominio del backend
+
     const $ = (s) => document.querySelector(s);
     const $$ = (s) => Array.from(document.querySelectorAll(s));
+    let isAdmin = false;
+    let token = sessionStorage.getItem('rv:token') || '';
 
-    const state = {
-      items: load(),
-      filter: ''
-    };
-
-    function load(){
-      try { return JSON.parse(localStorage.getItem(STORAGE_KEY)) ?? []; }
-      catch(e){ return []; }
+    // ===== HELPERS API =====
+    async function api(path, { method = 'GET', body, auth = false } = {}){
+      const headers = { 'Content-Type': 'application/json' };
+      if (auth && token) headers['Authorization'] = `Bearer ${token}`;
+      const res = await fetch(`${API_BASE}${path}`, { method, headers, body: body ? JSON.stringify(body) : undefined });
+      if (!res.ok) {
+        let errText = 'Error';
+        try { const j = await res.json(); errText = j.error || (j.errors && j.errors.join(', ')) || errText; } catch {}
+        throw new Error(errText);
+      }
+      return res.json();
     }
-    function persist(){ localStorage.setItem(STORAGE_KEY, JSON.stringify(state.items)); }
 
-    const nowISO = () => new Date().toISOString();
+    // Endpoints
+    const apiList = (q='') => api(`/api/voters${q?`?q=${encodeURIComponent(q)}`:''}`);
+    const apiExists = (cedula) => api(`/api/voters/exists?cedula=${encodeURIComponent(cedula)}`);
+    const apiCreate = (payload) => api('/api/voters', { method:'POST', body: payload });
+    const apiUpdate = (id, payload) => api(`/api/voters/${id}`, { method:'PUT', body: payload, auth: true });
+    const apiDelete = (id) => api(`/api/voters/${id}`, { method:'DELETE', auth: true });
+    const apiLogin  = (password) => api('/api/auth/login', { method:'POST', body:{ password } });
+
+    // ===== STATE =====
+    const state = { items: [], filter: '' };
+
     const fmtDT  = (iso) => new Date(iso).toLocaleString();
+    function escapeHtml(str){
+      return String(str)
+        .replaceAll('&','&amp;').replaceAll('<','&lt;').replaceAll('>','&gt;')
+        .replaceAll('"','&quot;').replaceAll("'","&#039;");
+    }
 
-    function validate(form){
-      let ok = form.checkValidity();
-      if (!ok) return false;
-      const nombre = $('#nombre').value.trim();
-      if (nombre.length < 2) ok = false;
-      return ok;
+    async function loadAndRender(){
+      const q = $('#q').value.trim();
+      state.items = await apiList(q);
+      render();
+    }
+
+    function render(){
+      const tbody = $('#tbody');
+      tbody.innerHTML = '';
+      $('#contador').textContent = state.items.length;
+      state.items.forEach((v, idx) => {
+        const tel = isAdmin ? v.telefono : String(v.telefono).replace(/\d(?=\d{2})/g, '•');
+        const tr = document.createElement('tr');
+        tr.innerHTML = `
+          <td>${idx+1}</td>
+          <td>${escapeHtml(v.nombre)}</td>
+          <td>${escapeHtml(v.cedula)}</td>
+          <td>${escapeHtml(tel)}</td>
+          <td>${escapeHtml(v.municipio)}</td>
+          <td>${fmtDT(v.created_at)}</td>
+          <td>
+            <button class="btn btn-sm btn-warning me-1" data-action="edit" data-id="${v.id}" ${isAdmin?'':'disabled'}><i class="bi bi-pencil"></i></button>
+            <button class="btn btn-sm btn-danger" data-action="del" data-id="${v.id}" ${isAdmin?'':'disabled'}><i class="bi bi-trash"></i></button>
+          </td>`;
+        tbody.appendChild(tr);
+      });
     }
 
     function clearForm(){
@@ -167,183 +208,113 @@
       $('#cedula-feedback').textContent = 'Ingresa una cédula válida (solo dígitos, mín. 4).';
     }
 
-    function upsertItem(payload){
-      const id = $('#id').value;
-      const exists = state.items.some(function(x){ return x.cedula === payload.cedula && x.id !== id; });
-      if (exists) throw new Error('La cédula ya existe.');
-
-      if (id){
-        const i = state.items.findIndex(function(x){ return x.id === id; });
-        if (i >= 0){ state.items[i] = Object.assign({}, state.items[i], payload); }
-      } else {
-        state.items.unshift({ id: crypto.randomUUID(), createdAt: nowISO(), nombre: payload.nombre, cedula: payload.cedula, telefono: payload.telefono, municipio: payload.municipio });
-      }
-      persist();
-    }
-
-    function removeItem(id){
-      state.items = state.items.filter(function(x){ return x.id !== id; });
-      persist();
-    }
-
-    function render(){
-      const tbody = document.getElementById('tbody');
-      tbody.innerHTML = '';
-      const q = state.filter.toLowerCase().trim();
-      const data = state.items.filter(function(v){
-        if (!q) return true;
-        return [v.nombre, v.cedula, v.telefono, v.municipio].some(function(f){ return String(f || '').toLowerCase().indexOf(q) !== -1; });
-      });
-      document.getElementById('contador').textContent = data.length;
-      data.forEach(function(v, idx){
-        const tr = document.createElement('tr');
-        const tel = isAdmin ? v.telefono : String(v.telefono).replace(/\d(?=\d{2})/g, '•');
-        tr.innerHTML = ''+
-          '<td>'+ (idx+1) +'</td>'+
-          '<td>'+ escapeHtml(v.nombre) +'</td>'+
-          '<td>'+ escapeHtml(v.cedula) +'</td>'+
-          '<td>'+ escapeHtml(tel) +'</td>'+
-          '<td>'+ escapeHtml(v.municipio) +'</td>'+
-          '<td>'+ fmtDT(v.createdAt) +'</td>'+
-          '<td>'+
-            '<button class="btn btn-sm btn-warning me-1" data-action="edit" data-id="'+v.id+'" '+(isAdmin?'' : 'disabled')+'><i class="bi bi-pencil"></i></button>'+
-            '<button class="btn btn-sm btn-danger" data-action="del" data-id="'+v.id+'" '+(isAdmin?'' : 'disabled')+'><i class="bi bi-trash"></i></button>'+
-          '</td>';
-        tbody.appendChild(tr);
-      });
-    }
-
-    function escapeHtml(str){
-      return String(str)
-        .replaceAll('&','&amp;')
-        .replaceAll('<','&lt;')
-        .replaceAll('>','&gt;')
-        .replaceAll('"','&quot;')
-        .replaceAll("'","&#039;");
-    }
-
-    // Submit
-    document.getElementById('form').addEventListener('submit', function(e){
+    // Submit (create/update)
+    $('#form').addEventListener('submit', async (e)=>{
       e.preventDefault();
-      const form = e.currentTarget;
-      if (!validate(form)){
-        $$('#form input').forEach(function(inp){ inp.classList.toggle('is-invalid', !inp.checkValidity()); });
+      const nombre = $('#nombre').value.trim();
+      const cedula = $('#cedula').value.trim();
+      const telefono = $('#telefono').value.trim();
+      const municipio = $('#municipio').value.trim();
+      if (nombre.length < 2 || !/^[0-9]{4,}$/.test(cedula) || !/^[0-9]{6,}$/.test(telefono) || municipio.length < 2){
+        $$('#form input').forEach(inp => { inp.classList.toggle('is-invalid', !inp.checkValidity()); });
         return;
       }
-      const payload = {
-        nombre: document.getElementById('nombre').value.trim(),
-        cedula: document.getElementById('cedula').value.trim(),
-        telefono: document.getElementById('telefono').value.trim(),
-        municipio: document.getElementById('municipio').value.trim()
-      };
+      const id = $('#id').value;
       try {
-        upsertItem(payload);
+        if (id) {
+          await apiUpdate(id, { nombre, cedula, telefono, municipio });
+        } else {
+          await apiCreate({ nombre, cedula, telefono, municipio });
+        }
         clearForm();
-        state.filter = document.getElementById('q').value;
-        render();
+        await loadAndRender();
       } catch(err){
-        document.getElementById('cedula').classList.add('is-invalid');
-        document.getElementById('cedula-feedback').textContent = err.message;
-      }
-    });
-
-    document.getElementById('btn-cancelar').addEventListener('click', clearForm);
-
-    document.getElementById('tbody').addEventListener('click', function(e){
-      const btn = e.target.closest('button[data-action]');
-      if (!btn) return;
-      const id = btn.getAttribute('data-id');
-      const action = btn.getAttribute('data-action');
-      if (action === 'edit'){
-        const v = state.items.find(function(x){ return x.id === id; });
-        if (!v) return;
-        document.getElementById('id').value = v.id;
-        document.getElementById('nombre').value = v.nombre;
-        document.getElementById('cedula').value = v.cedula;
-        document.getElementById('telefono').value = v.telefono;
-        document.getElementById('municipio').value = v.municipio;
-        document.getElementById('btn-cancelar').classList.remove('d-none');
-        scrollTo({ top: 0, behavior: 'smooth' });
-      } else if (action === 'del'){
-        if (confirm('¿Eliminar este registro?')){
-          removeItem(id);
-          render();
+        if (String(err.message).toLowerCase().includes('cédula')){
+          $('#cedula').classList.add('is-invalid');
+          $('#cedula-feedback').textContent = err.message;
+        } else {
+          alert(err.message);
         }
       }
     });
 
-    document.getElementById('btn-buscar').addEventListener('click', function(){
-      state.filter = document.getElementById('q').value;
-      render();
-    });
-    document.getElementById('btn-limpiar').addEventListener('click', function(){
-      document.getElementById('q').value = '';
-      state.filter = '';
-      render();
-    });
-
-    // Blur cédula: duplicado
-    document.getElementById('cedula').addEventListener('blur', function(){
-      const ced = document.getElementById('cedula').value.trim();
-      const id = document.getElementById('id').value;
-      const exists = state.items.some(function(x){ return x.cedula === ced && x.id !== id; });
-      if (exists){
-        document.getElementById('cedula').classList.add('is-invalid');
-        document.getElementById('cedula-feedback').textContent = 'Esta cédula ya está registrada.';
-      } else {
-        document.getElementById('cedula').classList.remove('is-invalid');
-        document.getElementById('cedula-feedback').textContent = 'Ingresa una cédula válida (solo dígitos, mín. 4).';
+    // Edit / Delete
+    $('#tbody').addEventListener('click', async (e)=>{
+      const btn = e.target.closest('button[data-action]');
+      if (!btn) return;
+      const id = btn.dataset.id;
+      const action = btn.dataset.action;
+      const v = state.items.find(x => String(x.id) === String(id));
+      if (!v) return;
+      if (action === 'edit'){
+        $('#id').value = v.id;
+        $('#nombre').value = v.nombre;
+        $('#cedula').value = v.cedula;
+        $('#telefono').value = v.telefono;
+        $('#municipio').value = v.municipio;
+        $('#btn-cancelar').classList.remove('d-none');
+        scrollTo({ top: 0, behavior: 'smooth' });
+      } else if (action === 'del'){
+        if (confirm('¿Eliminar este registro?')){
+          try { await apiDelete(id); await loadAndRender(); }
+          catch(err){ alert(err.message); }
+        }
       }
     });
 
-    // ===== Admin logic =====
-    async function sha256(str){
-      const enc = new TextEncoder();
-      const data = enc.encode(str);
-      const hash = await crypto.subtle.digest('SHA-256', data);
-      return Array.from(new Uint8Array(hash)).map(function(b){ return b.toString(16).padStart(2,'0'); }).join('');
-    }
+    // Cancelar edición
+    $('#btn-cancelar').addEventListener('click', clearForm);
 
+    // Buscar
+    $('#btn-buscar').addEventListener('click', loadAndRender);
+    $('#btn-limpiar').addEventListener('click', ()=>{ $('#q').value=''; loadAndRender(); });
+    $('#q').addEventListener('keydown', (e)=>{ if (e.key==='Enter'){ e.preventDefault(); loadAndRender(); } });
+
+    // Blur cédula (server check)
+    $('#cedula').addEventListener('blur', async ()=>{
+      const ced = $('#cedula').value.trim();
+      if (!ced) return;
+      try {
+        const { exists } = await apiExists(ced);
+        if (exists){
+          $('#cedula').classList.add('is-invalid');
+          $('#cedula-feedback').textContent = 'Esta cédula ya está registrada.';
+        } else {
+          $('#cedula').classList.remove('is-invalid');
+          $('#cedula-feedback').textContent = 'Ingresa una cédula válida (solo dígitos, mín. 4).';
+        }
+      } catch {}
+    });
+
+    // ===== Admin =====
+    const adminModal = new bootstrap.Modal('#adminModal');
     function setAdmin(on){
       isAdmin = !!on;
-      document.getElementById('admin-badge').textContent = on ? 'Admin activo' : 'Modo visitante';
-      document.getElementById('admin-badge').className = on ? 'badge text-bg-success' : 'badge text-bg-secondary';
-      document.getElementById('admin-tools').classList.toggle('d-none', !on);
-      document.getElementById('btn-admin').classList.toggle('d-none', on);
-      document.getElementById('btn-logout').classList.toggle('d-none', !on);
+      $('#admin-badge').textContent = on ? 'Admin activo' : 'Modo visitante';
+      $('#admin-badge').className = on ? 'badge text-bg-success' : 'badge text-bg-secondary';
+      $('#admin-tools').classList.toggle('d-none', !on);
+      $('#btn-admin').classList.toggle('d-none', on);
+      $('#btn-logout').classList.toggle('d-none', !on);
       render();
     }
 
-    var adminModal;
-    document.addEventListener('DOMContentLoaded', function(){
-      adminModal = new bootstrap.Modal('#adminModal');
+    $('#btn-admin').addEventListener('click', ()=>{ $('#admin-pass').value=''; adminModal.show(); });
+    $('#btn-admin-login').addEventListener('click', async ()=>{
+      const password = $('#admin-pass').value;
+      try {
+        const { token: t } = await apiLogin(password);
+        token = t; sessionStorage.setItem('rv:token', token);
+        adminModal.hide(); setAdmin(true);
+      } catch(err){ alert(err.message); }
     });
+    $('#btn-logout').addEventListener('click', ()=>{ token=''; sessionStorage.removeItem('rv:token'); setAdmin(false); });
 
-    document.getElementById('btn-admin').addEventListener('click', function(){
-      document.getElementById('admin-pass').value='';
-      adminModal.show();
-    });
-
-    document.getElementById('btn-admin-login').addEventListener('click', async function(){
-      const pass = document.getElementById('admin-pass').value;
-      if (!pass) return;
-      const h = await sha256(pass);
-      const expected = await sha256('VOTANTES2025');
-      if (h === expected){
-        adminModal.hide();
-        setAdmin(true);
-      } else {
-        alert('Contraseña incorrecta');
-      }
-    });
-
-    document.getElementById('btn-logout').addEventListener('click', function(){ setAdmin(false); });
-
-    document.getElementById('btn-export').addEventListener('click', function(){
+    // Export CSV (cliente)
+    $('#btn-export').addEventListener('click', ()=>{
       const rows = [['Nombre','Cédula','Teléfono','Municipio','Creado']].concat(
-        state.items.map(function(v){ return [v.nombre,v.cedula,v.telefono,v.municipio,v.createdAt]; })
+        state.items.map(v=>[v.nombre,v.cedula,v.telefono,v.municipio,v.created_at])
       );
-      const csv = rows.map(function(r){ return r.map(function(x){ return '"' + String(x).replaceAll('"','""') + '"'; }).join(','); }).join('\n');
+      const csv = rows.map(r=>r.map(x=>`"${String(x).replaceAll('"','""')}"`).join(',')).join('\n');
       const blob = new Blob([csv], {type:'text/csv;charset=utf-8;'});
       const url = URL.createObjectURL(blob);
       const a = document.createElement('a');
@@ -351,17 +322,12 @@
       URL.revokeObjectURL(url);
     });
 
-    document.getElementById('btn-wipe').addEventListener('click', function(){
-      if (!isAdmin) return;
-      if (confirm('¿Eliminar TODOS los registros?')){
-        state.items = [];
-        persist();
-        render();
-      }
-    });
+    // Wipe local (solo visual; real sería endpoint protegido si quieres)
+    $('#btn-wipe').addEventListener('click', ()=>{ alert('Esta acción, si la quieres real, la hacemos con un endpoint protegido en el backend.'); });
 
-    // Inicial
-    render();
+    // Init: si ya hay token, activar admin
+    if (token) setAdmin(true);
+    loadAndRender();
   </script>
   <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
 </body>
