@@ -42,22 +42,22 @@
           <input type="hidden" id="id" />
           <div class="col-md-3">
             <label class="form-label required" for="nombre">Nombre</label>
-            <input class="form-control" id="nombre" placeholder="Ej. Ana Pérez" required />
+            <input class="form-control" id="nombre" required />
             <div class="invalid-feedback">Ingresa un nombre válido (mín. 2 caracteres).</div>
           </div>
           <div class="col-md-3">
             <label class="form-label required" for="cedula">Cédula</label>
-            <input class="form-control" id="cedula" inputmode="numeric" pattern="[0-9]{4,}" placeholder="Ej. 123456789" required />
+            <input class="form-control" id="cedula" inputmode="numeric" pattern="[0-9]{4,}" required />
             <div class="invalid-feedback" id="cedula-feedback">Ingresa una cédula válida (solo dígitos, mín. 4).</div>
           </div>
           <div class="col-md-3">
             <label class="form-label required" for="telefono">Teléfono</label>
-            <input class="form-control" id="telefono" inputmode="tel" pattern="[0-9]{6,}" placeholder="Ej. 3001234567" required />
+            <input class="form-control" id="telefono" inputmode="tel" pattern="[0-9]{6,}" required />
             <div class="invalid-feedback">Ingresa un teléfono válido (solo dígitos, mín. 6).</div>
           </div>
           <div class="col-md-3">
             <label class="form-label required" for="municipio">Municipio</label>
-            <input class="form-control" id="municipio" placeholder="Ej. Pasto" required />
+            <input class="form-control" id="municipio" required />
             <div class="invalid-feedback">Ingresa el municipio.</div>
           </div>
           <div class="col-12 d-flex gap-2">
@@ -123,7 +123,7 @@
         </div>
         <div class="modal-body">
           <label class="form-label" for="admin-pass">Contraseña</label>
-          <input id="admin-pass" type="password" class="form-control" placeholder="Ingresa la contraseña" />
+          <input id="admin-pass" type="password" class="form-control" />
           <div class="form-text">* La verificaremos contra el servidor.</div>
         </div>
         <div class="modal-footer">
@@ -151,28 +151,11 @@
 
     // ===== LOCAL STORAGE (solo visitante) =====
     const LS_KEY = 'rv:voters';
-
-    function lsGetAll() {
-      try { return JSON.parse(localStorage.getItem(LS_KEY)) || []; }
-      catch { return []; }
-    }
-    function lsSaveAll(arr) { localStorage.setItem(LS_KEY, JSON.stringify(arr)); }
-    function lsAdd(v) {
-      const arr = lsGetAll();
-      v._lid = v._lid || (Date.now() + '-' + Math.random().toString(36).slice(2,8));
-      v.created_at = v.created_at || new Date().toISOString();
-      arr.unshift(v); lsSaveAll(arr); return v;
-    }
-    function lsUpdate(lid, data) {
-      const arr = lsGetAll();
-      const i = arr.findIndex(x => x._lid === lid);
-      if (i >= 0) arr[i] = { ...arr[i], ...data };
-      lsSaveAll(arr);
-    }
-    function lsDelete(lid) {
-      const arr = lsGetAll().filter(x => x._lid !== lid);
-      lsSaveAll(arr);
-    }
+    const lsGetAll = () => { try { return JSON.parse(localStorage.getItem(LS_KEY)) || []; } catch { return []; } };
+    const lsSaveAll = (arr) => localStorage.setItem(LS_KEY, JSON.stringify(arr));
+    function lsAdd(v){ const arr = lsGetAll(); v._lid = v._lid || (Date.now() + '-' + Math.random().toString(36).slice(2,8)); v.created_at = v.created_at || new Date().toISOString(); arr.unshift(v); lsSaveAll(arr); return v; }
+    function lsUpdate(lid,data){ const arr = lsGetAll(); const i = arr.findIndex(x=>x._lid===lid); if(i>=0) arr[i] = {...arr[i], ...data}; lsSaveAll(arr); }
+    function lsDelete(lid){ lsSaveAll(lsGetAll().filter(x=>x._lid!==lid)); }
 
     // ===== HELPERS API =====
     async function api(path, { method = 'GET', body, auth = false } = {}){
@@ -186,8 +169,6 @@
       }
       return res.json();
     }
-
-    // Endpoints (sin backtick extra)
     const apiList   = (q='') => api(`/api/voters${q ? `?q=${encodeURIComponent(q)}` : ''}`);
     const apiExists = (cedula) => api(`/api/voters/exists?cedula=${encodeURIComponent(cedula)}`);
     const apiCreate = (payload) => api('/api/voters', { method:'POST', body: payload });
@@ -227,21 +208,18 @@
       $('#contador').textContent = state.items.length;
 
       state.items.forEach((v, idx) => {
-        // si admin y viene del servidor => marcar id con prefijo srv:
         const rowId = isAdmin && v.id ? `srv:${v.id}` : (v._lid || '');
-        const tel = v.telefono;
-
         const tr = document.createElement('tr');
         tr.innerHTML = `
           <td>${idx+1}</td>
           <td>${escapeHtml(v.nombre)}</td>
           <td>${escapeHtml(v.cedula)}</td>
-          <td>${escapeHtml(tel)}</td>
+          <td>${escapeHtml(v.telefono)}</td>
           <td>${escapeHtml(v.municipio)}</td>
           <td>${fmtDT(v.created_at)}</td>
           <td>
-            <button class="btn btn-sm btn-warning me-1" data-action="edit" data-id="${rowId}"><i class="bi bi-pencil"></i></button>
-            <button class="btn btn-sm btn-danger" data-action="del" data-id="${rowId}"><i class="bi bi-trash"></i></button>
+            <button class="btn btn-sm btn-warning me-1" data-action="edit" data-id="${rowId}" ${!isAdmin ? 'disabled title="Solo admin"' : ''}><i class="bi bi-pencil"></i></button>
+            <button class="btn btn-sm btn-danger"  data-action="del"  data-id="${rowId}" ${!isAdmin ? 'disabled title="Solo admin"' : ''}><i class="bi bi-trash"></i></button>
           </td>`;
         tbody.appendChild(tr);
       });
@@ -270,22 +248,21 @@
       }
 
       const rowId = $('#id').value; // _lid local o srv:ID
+
       try {
-        if (isAdmin && rowId.startsWith('srv:')) {
-          // edición en servidor
-          const idSrv = rowId.replace('srv:','');
-          await apiUpdate(idSrv, { nombre, cedula, telefono, municipio });
-        } else if (rowId) {
-          // edición local
-          lsUpdate(rowId, { nombre, cedula, telefono, municipio });
+        if (!isAdmin) {
+          // Visitante: NO puede editar/borrar. Solo crear local + sync silenciosa.
+          lsAdd({ nombre, cedula, telefono, municipio });
+          apiCreate({ nombre, cedula, telefono, municipio }).catch(()=>{});
         } else {
-          // nuevo: guardar local
-          const local = lsAdd({ nombre, cedula, telefono, municipio });
-
-          // sync silencioso hacia el servidor (para que admin los vea)
-          apiCreate({ nombre, cedula, telefono, municipio }).catch(()=>{ /* no romper UX local */ });
+          // Admin: crea/edita en servidor
+          if (rowId && rowId.startsWith('srv:')) {
+            const idSrv = rowId.replace('srv:','');
+            await apiUpdate(idSrv, { nombre, cedula, telefono, municipio });
+          } else {
+            await apiCreate({ nombre, cedula, telefono, municipio });
+          }
         }
-
         clearForm();
         await loadAndRender();
       } catch(err){
@@ -298,20 +275,24 @@
       }
     });
 
-    // ===== Edit / Delete (doble origen) =====
+    // ===== Edit / Delete (solo admin) =====
     $('#tbody').addEventListener('click', async (e)=>{
       const btn = e.target.closest('button[data-action]');
       if (!btn) return;
+
+      if (!isAdmin) {
+        // Visitante: ignora acciones
+        return;
+      }
+
       const rowId = btn.dataset.id;
       const action = btn.dataset.action;
 
-      // localizar registro correspondiente
+      // localizar registro correspondiente (admin ve server)
       let v;
-      if (isAdmin && rowId.startsWith('srv:')) {
+      if (rowId && rowId.startsWith('srv:')) {
         const idSrv = rowId.replace('srv:','');
         v = state.items.find(x => String(x.id) === String(idSrv));
-      } else {
-        v = state.items.find(x => x._lid === rowId);
       }
       if (!v) return;
 
@@ -325,20 +306,15 @@
         scrollTo({ top: 0, behavior: 'smooth' });
       } else if (action === 'del'){
         if (!confirm('¿Eliminar este registro?')) return;
-
-        try {
-          if (isAdmin && rowId.startsWith('srv:')) {
-            const idSrv = rowId.replace('srv:','');
-            await apiDelete(idSrv);
-          } else {
-            lsDelete(rowId);
-          }
-          await loadAndRender();
+        try { 
+          const idSrv = rowId.replace('srv:','');
+          await apiDelete(idSrv);
+          await loadAndRender(); 
         } catch(err){ alert(err.message); }
       }
     });
 
-    // Cancelar edición
+    // Cancelar edición (solo visible cuando admin edita)
     $('#btn-cancelar').addEventListener('click', clearForm);
 
     // Buscar
