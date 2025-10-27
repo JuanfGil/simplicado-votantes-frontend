@@ -134,12 +134,12 @@
     </div>
   </div>
 
-  <!-- Bootstrap JS Bundle con Popper (cárgalo ANTES de tu script) -->
+  <!-- Bootstrap JS Bundle con Popper -->
   <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"
           integrity="sha384-YvpcrYf0tY3lHB60NNkmXc5s9fDVZLESaAA55NDzOxhy9GkcIdslK1eN7N6jIeHz"
           crossorigin="anonymous"></script>
 
-  <!-- Tu script (inline) -->
+  <!-- Script principal -->
   <script>
     // ===== CONFIG =====
     const API_BASE = 'https://registro-votantes-api-1.onrender.com'; // <-- tu URL backend
@@ -148,6 +148,31 @@
     const $$ = (s) => Array.from(document.querySelectorAll(s));
     let isAdmin = false;
     let token = sessionStorage.getItem('rv:token') || '';
+
+    // ===== LOCAL STORAGE (solo visitante) =====
+    const LS_KEY = 'rv:voters';
+
+    function lsGetAll() {
+      try { return JSON.parse(localStorage.getItem(LS_KEY)) || []; }
+      catch { return []; }
+    }
+    function lsSaveAll(arr) { localStorage.setItem(LS_KEY, JSON.stringify(arr)); }
+    function lsAdd(v) {
+      const arr = lsGetAll();
+      v._lid = v._lid || (Date.now() + '-' + Math.random().toString(36).slice(2,8));
+      v.created_at = v.created_at || new Date().toISOString();
+      arr.unshift(v); lsSaveAll(arr); return v;
+    }
+    function lsUpdate(lid, data) {
+      const arr = lsGetAll();
+      const i = arr.findIndex(x => x._lid === lid);
+      if (i >= 0) arr[i] = { ...arr[i], ...data };
+      lsSaveAll(arr);
+    }
+    function lsDelete(lid) {
+      const arr = lsGetAll().filter(x => x._lid !== lid);
+      lsSaveAll(arr);
+    }
 
     // ===== HELPERS API =====
     async function api(path, { method = 'GET', body, auth = false } = {}){
@@ -162,7 +187,7 @@
       return res.json();
     }
 
-    // Endpoints  (FIX: backtick extra eliminado)
+    // Endpoints (sin backtick extra)
     const apiList   = (q='') => api(`/api/voters${q ? `?q=${encodeURIComponent(q)}` : ''}`);
     const apiExists = (cedula) => api(`/api/voters/exists?cedula=${encodeURIComponent(cedula)}`);
     const apiCreate = (payload) => api('/api/voters', { method:'POST', body: payload });
@@ -172,17 +197,27 @@
 
     // ===== STATE =====
     const state = { items: [], filter: '' };
-
     const fmtDT  = (iso) => new Date(iso).toLocaleString();
-    function escapeHtml(str){
-      return String(str)
-        .replaceAll('&','&amp;').replaceAll('<','&lt;').replaceAll('>','&gt;')
-        .replaceAll('"','&quot;').replaceAll("'","&#039;");
-    }
+    const escapeHtml = (str) => String(str)
+      .replaceAll('&','&amp;').replaceAll('<','&lt;').replaceAll('>','&gt;')
+      .replaceAll('"','&quot;').replaceAll("'","&#039;");
 
+    // ===== LOAD & RENDER (híbrido) =====
     async function loadAndRender(){
-      const q = $('#q').value.trim();
-      state.items = await apiList(q);
+      const q = $('#q').value.trim().toLowerCase();
+
+      if (isAdmin) {
+        // Admin: todo desde servidor
+        state.items = await apiList(q);
+      } else {
+        // Visitante: solo local
+        const all = lsGetAll();
+        state.items = all.filter(v => {
+          if (!q) return true;
+          const txt = `${v.nombre} ${v.cedula} ${v.telefono} ${v.municipio}`.toLowerCase();
+          return txt.includes(q);
+        });
+      }
       render();
     }
 
@@ -190,8 +225,12 @@
       const tbody = $('#tbody');
       tbody.innerHTML = '';
       $('#contador').textContent = state.items.length;
+
       state.items.forEach((v, idx) => {
+        // si admin y viene del servidor => marcar id con prefijo srv:
+        const rowId = isAdmin && v.id ? `srv:${v.id}` : (v._lid || '');
         const tel = v.telefono;
+
         const tr = document.createElement('tr');
         tr.innerHTML = `
           <td>${idx+1}</td>
@@ -201,8 +240,8 @@
           <td>${escapeHtml(v.municipio)}</td>
           <td>${fmtDT(v.created_at)}</td>
           <td>
-            <button class="btn btn-sm btn-warning me-1" data-action="edit" data-id="${v.id}" ${isAdmin?'':'disabled'}><i class="bi bi-pencil"></i></button>
-            <button class="btn btn-sm btn-danger" data-action="del" data-id="${v.id}" ${isAdmin?'':'disabled'}><i class="bi bi-trash"></i></button>
+            <button class="btn btn-sm btn-warning me-1" data-action="edit" data-id="${rowId}"><i class="bi bi-pencil"></i></button>
+            <button class="btn btn-sm btn-danger" data-action="del" data-id="${rowId}"><i class="bi bi-trash"></i></button>
           </td>`;
         tbody.appendChild(tr);
       });
@@ -217,24 +256,36 @@
       $('#cedula-feedback').textContent = 'Ingresa una cédula válida (solo dígitos, mín. 4).';
     }
 
-    // Submit (create/update)
+    // ===== Submit (create/update) =====
     $('#form').addEventListener('submit', async (e)=>{
       e.preventDefault();
       const nombre = $('#nombre').value.trim();
       const cedula = $('#cedula').value.trim();
       const telefono = $('#telefono').value.trim();
       const municipio = $('#municipio').value.trim();
+
       if (nombre.length < 2 || !/^[0-9]{4,}$/.test(cedula) || !/^[0-9]{6,}$/.test(telefono) || municipio.length < 2){
         $$('#form input').forEach(inp => { inp.classList.toggle('is-invalid', !inp.checkValidity()); });
         return;
       }
-      const id = $('#id').value;
+
+      const rowId = $('#id').value; // _lid local o srv:ID
       try {
-        if (id) {
-          await apiUpdate(id, { nombre, cedula, telefono, municipio });
+        if (isAdmin && rowId.startsWith('srv:')) {
+          // edición en servidor
+          const idSrv = rowId.replace('srv:','');
+          await apiUpdate(idSrv, { nombre, cedula, telefono, municipio });
+        } else if (rowId) {
+          // edición local
+          lsUpdate(rowId, { nombre, cedula, telefono, municipio });
         } else {
-          await apiCreate({ nombre, cedula, telefono, municipio });
+          // nuevo: guardar local
+          const local = lsAdd({ nombre, cedula, telefono, municipio });
+
+          // sync silencioso hacia el servidor (para que admin los vea)
+          apiCreate({ nombre, cedula, telefono, municipio }).catch(()=>{ /* no romper UX local */ });
         }
+
         clearForm();
         await loadAndRender();
       } catch(err){
@@ -247,16 +298,25 @@
       }
     });
 
-    // Edit / Delete
+    // ===== Edit / Delete (doble origen) =====
     $('#tbody').addEventListener('click', async (e)=>{
       const btn = e.target.closest('button[data-action]');
       if (!btn) return;
-      const id = btn.dataset.id;
+      const rowId = btn.dataset.id;
       const action = btn.dataset.action;
-      const v = state.items.find(x => String(x.id) === String(id));
+
+      // localizar registro correspondiente
+      let v;
+      if (isAdmin && rowId.startsWith('srv:')) {
+        const idSrv = rowId.replace('srv:','');
+        v = state.items.find(x => String(x.id) === String(idSrv));
+      } else {
+        v = state.items.find(x => x._lid === rowId);
+      }
       if (!v) return;
+
       if (action === 'edit'){
-        $('#id').value = v.id;
+        $('#id').value = rowId;
         $('#nombre').value = v.nombre;
         $('#cedula').value = v.cedula;
         $('#telefono').value = v.telefono;
@@ -264,10 +324,17 @@
         $('#btn-cancelar').classList.remove('d-none');
         scrollTo({ top: 0, behavior: 'smooth' });
       } else if (action === 'del'){
-        if (confirm('¿Eliminar este registro?')){
-          try { await apiDelete(id); await loadAndRender(); }
-          catch(err){ alert(err.message); }
-        }
+        if (!confirm('¿Eliminar este registro?')) return;
+
+        try {
+          if (isAdmin && rowId.startsWith('srv:')) {
+            const idSrv = rowId.replace('srv:','');
+            await apiDelete(idSrv);
+          } else {
+            lsDelete(rowId);
+          }
+          await loadAndRender();
+        } catch(err){ alert(err.message); }
       }
     });
 
@@ -279,20 +346,33 @@
     $('#btn-limpiar').addEventListener('click', ()=>{ $('#q').value=''; loadAndRender(); });
     $('#q').addEventListener('keydown', (e)=>{ if (e.key==='Enter'){ e.preventDefault(); loadAndRender(); } });
 
-    // Blur cédula (server check)
+    // Blur cédula: visitante valida local, admin valida servidor
     $('#cedula').addEventListener('blur', async ()=>{
       const ced = $('#cedula').value.trim();
       if (!ced) return;
-      try {
-        const { exists } = await apiExists(ced);
-        if (exists){
+
+      if (!isAdmin) {
+        const existsLocal = lsGetAll().some(v => String(v.cedula) === String(ced));
+        if (existsLocal){
           $('#cedula').classList.add('is-invalid');
-          $('#cedula-feedback').textContent = 'Esta cédula ya está registrada.';
+          $('#cedula-feedback').textContent = 'Esta cédula ya está registrada en este dispositivo.';
         } else {
           $('#cedula').classList.remove('is-invalid');
           $('#cedula-feedback').textContent = 'Ingresa una cédula válida (solo dígitos, mín. 4).';
         }
-      } catch {}
+        return;
+      }
+
+      try {
+        const { exists } = await apiExists(ced);
+        if (exists){
+          $('#cedula').classList.add('is-invalid');
+          $('#cedula-feedback').textContent = 'Esta cédula ya existe en el servidor.';
+        } else {
+          $('#cedula').classList.remove('is-invalid');
+          $('#cedula-feedback').textContent = 'Ingresa una cédula válida (solo dígitos, mín. 4).';
+        }
+      } catch { /* ignorar */ }
     });
 
     // ===== Admin =====
@@ -305,6 +385,7 @@
       $('#btn-admin').classList.toggle('d-none', on);
       $('#btn-logout').classList.toggle('d-none', !on);
       render();
+      loadAndRender(); // recarga desde la fuente correcta
     }
 
     $('#btn-admin').addEventListener('click', ()=>{ $('#admin-pass').value=''; adminModal.show(); });
