@@ -37,7 +37,7 @@
           <div class="col-md-3">
             <label class="form-label required" for="cedula">Cédula</label>
             <input class="form-control" id="cedula" inputmode="numeric" pattern="[0-9]{4,}" placeholder="Ej. 123456789" required />
-            <div class="invalid-feedback">Ingresa una cédula válida (solo dígitos, mín. 4).</div>
+            <div class="invalid-feedback" id="cedula-feedback">Ingresa una cédula válida (solo dígitos, mín. 4).</div>
           </div>
           <div class="col-md-3">
             <label class="form-label required" for="telefono">Teléfono</label>
@@ -94,7 +94,6 @@
   </div>
 
   <script>
-    // ====== Estado en memoria/localStorage ======
     const STORAGE_KEY = 'rvoters:v1';
     const $ = (s) => document.querySelector(s);
     const $$ = (s) => Array.from(document.querySelectorAll(s));
@@ -110,12 +109,10 @@
     }
     function persist(){ localStorage.setItem(STORAGE_KEY, JSON.stringify(state.items)); }
 
-    // ====== Helpers ======
     const nowISO = () => new Date().toISOString();
     const fmtDT  = (iso) => new Date(iso).toLocaleString();
 
     function validate(form){
-      // HTML5 validation + reglas mínimas
       let ok = form.checkValidity();
       if (!ok) return false;
       const nombre = $('#nombre').value.trim();
@@ -128,11 +125,12 @@
       $('#form').reset();
       $('#btn-cancelar').classList.add('d-none');
       $$('#form .is-invalid').forEach(el=>el.classList.remove('is-invalid'));
+      $('#cedula').classList.remove('is-invalid');
+      $('#cedula-feedback').textContent = 'Ingresa una cédula válida (solo dígitos, mín. 4).';
     }
 
     function upsertItem(payload){
       const id = $('#id').value;
-      // Evitar cédula repetida (si es nuevo o si cambia la cédula en edición)
       const exists = state.items.some(x => x.cedula === payload.cedula && x.id !== id);
       if (exists) throw new Error('La cédula ya existe.');
 
@@ -182,12 +180,10 @@
         .replaceAll("'","&#039;");
     }
 
-    // ====== Eventos ======
     $('#form').addEventListener('submit', (e)=>{
       e.preventDefault();
       const form = e.currentTarget;
       if (!validate(form)){
-        // activar estilos de error
         $$('#form input').forEach(inp => {
           inp.classList.toggle('is-invalid', !inp.checkValidity());
         });
@@ -205,7 +201,8 @@
         state.filter = $('#q').value;
         render();
       } catch(err){
-        alert(err.message || 'No se pudo guardar.');
+        $('#cedula').classList.add('is-invalid');
+        $('#cedula-feedback').textContent = err.message;
       }
     });
 
@@ -244,12 +241,23 @@
       render();
     });
 
-    // Enter para buscar
+    $('#cedula').addEventListener('blur', ()=>{
+      const ced = $('#cedula').value.trim();
+      const id = $('#id').value;
+      const exists = state.items.some(x => x.cedula === ced && x.id !== id);
+      if (exists){
+        $('#cedula').classList.add('is-invalid');
+        $('#cedula-feedback').textContent = 'Esta cédula ya está registrada.';
+      } else {
+        $('#cedula').classList.remove('is-invalid');
+        $('#cedula-feedback').textContent = 'Ingresa una cédula válida (solo dígitos, mín. 4).';
+      }
+    });
+
     $('#q').addEventListener('keydown', (e)=>{
       if (e.key === 'Enter') { e.preventDefault(); $('#btn-buscar').click(); }
     });
 
-    // Inicial
     render();
   </script>
 </body>
