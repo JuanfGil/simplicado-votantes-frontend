@@ -16,11 +16,18 @@
 </head>
 <body>
   <div class="container py-4">
-    <div class="d-flex align-items-center gap-2 mb-3">
-      <i class="bi bi-people-fill fs-3 text-primary"></i>
-      <div>
-        <h1 class="h3 m-0">Registro de Votantes</h1>
-        <div class="small-muted">Campos: <strong>Nombre</strong>, <strong>Cédula</strong>, <strong>Teléfono</strong>, <strong>Municipio</strong>. (Versión frontend local)</div>
+    <div class="d-flex align-items-center justify-content-between gap-2 mb-3">
+      <div class="d-flex align-items-center gap-2">
+        <i class="bi bi-people-fill fs-3 text-primary"></i>
+        <div>
+          <h1 class="h3 m-0">Registro de Votantes</h1>
+          <div class="small-muted">Campos: <strong>Nombre</strong>, <strong>Cédula</strong>, <strong>Teléfono</strong>, <strong>Municipio</strong>. (Versión frontend local)</div>
+        </div>
+      </div>
+      <div class="d-flex align-items-center gap-2">
+        <span id="admin-badge" class="badge text-bg-secondary">Modo visitante</span>
+        <button id="btn-admin" class="btn btn-outline-dark btn-sm"><i class="bi bi-shield-lock"></i> Admin</button>
+        <button id="btn-logout" class="btn btn-outline-secondary btn-sm d-none"><i class="bi bi-box-arrow-right"></i> Salir</button>
       </div>
     </div>
 
@@ -54,6 +61,15 @@
             <button class="btn btn-secondary d-none" id="btn-cancelar" type="button"><i class="bi bi-x-circle me-1"></i>Cancelar edición</button>
           </div>
         </form>
+      </div>
+    </div>
+
+    <!-- ADMIN TOOLS -->
+    <div id="admin-tools" class="row g-2 align-items-center mb-3 d-none">
+      <div class="col-sm-8 small-muted">Herramientas de administrador</div>
+      <div class="col-sm-4 text-sm-end d-flex gap-2 justify-content-sm-end">
+        <button id="btn-export" class="btn btn-outline-success btn-sm"><i class="bi bi-download"></i> Exportar CSV</button>
+        <button id="btn-wipe" class="btn btn-outline-danger btn-sm"><i class="bi bi-trash3"></i> Eliminar todo</button>
       </div>
     </div>
 
@@ -93,8 +109,30 @@
     </div>
   </div>
 
+  <!-- Modal Admin -->
+  <div class="modal fade" id="adminModal" tabindex="-1" aria-hidden="true">
+    <div class="modal-dialog modal-dialog-centered">
+      <div class="modal-content">
+        <div class="modal-header">
+          <h5 class="modal-title"><i class="bi bi-shield-lock"></i> Acceso administrador</h5>
+          <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+        </div>
+        <div class="modal-body">
+          <label class="form-label" for="admin-pass">Contraseña</label>
+          <input id="admin-pass" type="password" class="form-control" placeholder="Ingresa la contraseña" />
+          <div class="form-text">* Cámbiala cuando pasemos a servidor.</div>
+        </div>
+        <div class="modal-footer">
+          <button class="btn btn-secondary" data-bs-dismiss="modal">Cancelar</button>
+          <button id="btn-admin-login" class="btn btn-primary">Ingresar</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
   <script>
     const STORAGE_KEY = 'rvoters:v1';
+    let isAdmin = false;
     const $ = (s) => document.querySelector(s);
     const $$ = (s) => Array.from(document.querySelectorAll(s));
 
@@ -131,42 +169,46 @@
 
     function upsertItem(payload){
       const id = $('#id').value;
-      const exists = state.items.some(x => x.cedula === payload.cedula && x.id !== id);
+      const exists = state.items.some(function(x){ return x.cedula === payload.cedula && x.id !== id; });
       if (exists) throw new Error('La cédula ya existe.');
 
       if (id){
-        const i = state.items.findIndex(x => x.id === id);
-        if (i >= 0){ state.items[i] = { ...state.items[i], ...payload }; }
+        const i = state.items.findIndex(function(x){ return x.id === id; });
+        if (i >= 0){ state.items[i] = Object.assign({}, state.items[i], payload); }
       } else {
-        state.items.unshift({ id: crypto.randomUUID(), createdAt: nowISO(), ...payload });
+        state.items.unshift({ id: crypto.randomUUID(), createdAt: nowISO(), nombre: payload.nombre, cedula: payload.cedula, telefono: payload.telefono, municipio: payload.municipio });
       }
       persist();
     }
 
     function removeItem(id){
-      state.items = state.items.filter(x => x.id !== id);
+      state.items = state.items.filter(function(x){ return x.id !== id; });
       persist();
     }
 
     function render(){
-      const tbody = $('#tbody');
+      const tbody = document.getElementById('tbody');
       tbody.innerHTML = '';
       const q = state.filter.toLowerCase().trim();
-      const data = state.items.filter(v => !q || [v.nombre, v.cedula, v.telefono, v.municipio].some(f => (f||'').toLowerCase().includes(q)) );
-      $('#contador').textContent = data.length;
-      data.forEach((v, idx) => {
+      const data = state.items.filter(function(v){
+        if (!q) return true;
+        return [v.nombre, v.cedula, v.telefono, v.municipio].some(function(f){ return String(f || '').toLowerCase().indexOf(q) !== -1; });
+      });
+      document.getElementById('contador').textContent = data.length;
+      data.forEach(function(v, idx){
         const tr = document.createElement('tr');
-        tr.innerHTML = `
-          <td>${idx+1}</td>
-          <td>${escapeHtml(v.nombre)}</td>
-          <td>${escapeHtml(v.cedula)}</td>
-          <td>${escapeHtml(v.telefono)}</td>
-          <td>${escapeHtml(v.municipio)}</td>
-          <td>${fmtDT(v.createdAt)}</td>
-          <td>
-            <button class="btn btn-sm btn-warning me-1" data-action="edit" data-id="${v.id}"><i class="bi bi-pencil"></i></button>
-            <button class="btn btn-sm btn-danger" data-action="del" data-id="${v.id}"><i class="bi bi-trash"></i></button>
-          </td>`;
+        const tel = isAdmin ? v.telefono : String(v.telefono).replace(/\d(?=\d{2})/g, '•');
+        tr.innerHTML = ''+
+          '<td>'+ (idx+1) +'</td>'+
+          '<td>'+ escapeHtml(v.nombre) +'</td>'+
+          '<td>'+ escapeHtml(v.cedula) +'</td>'+
+          '<td>'+ escapeHtml(tel) +'</td>'+
+          '<td>'+ escapeHtml(v.municipio) +'</td>'+
+          '<td>'+ fmtDT(v.createdAt) +'</td>'+
+          '<td>'+
+            '<button class="btn btn-sm btn-warning me-1" data-action="edit" data-id="'+v.id+'" '+(isAdmin?'' : 'disabled')+'><i class="bi bi-pencil"></i></button>'+
+            '<button class="btn btn-sm btn-danger" data-action="del" data-id="'+v.id+'" '+(isAdmin?'' : 'disabled')+'><i class="bi bi-trash"></i></button>'+
+          '</td>';
         tbody.appendChild(tr);
       });
     }
@@ -180,48 +222,47 @@
         .replaceAll("'","&#039;");
     }
 
-    $('#form').addEventListener('submit', (e)=>{
+    // Submit
+    document.getElementById('form').addEventListener('submit', function(e){
       e.preventDefault();
       const form = e.currentTarget;
       if (!validate(form)){
-        $$('#form input').forEach(inp => {
-          inp.classList.toggle('is-invalid', !inp.checkValidity());
-        });
+        $$('#form input').forEach(function(inp){ inp.classList.toggle('is-invalid', !inp.checkValidity()); });
         return;
       }
       const payload = {
-        nombre: $('#nombre').value.trim(),
-        cedula: $('#cedula').value.trim(),
-        telefono: $('#telefono').value.trim(),
-        municipio: $('#municipio').value.trim()
+        nombre: document.getElementById('nombre').value.trim(),
+        cedula: document.getElementById('cedula').value.trim(),
+        telefono: document.getElementById('telefono').value.trim(),
+        municipio: document.getElementById('municipio').value.trim()
       };
       try {
         upsertItem(payload);
         clearForm();
-        state.filter = $('#q').value;
+        state.filter = document.getElementById('q').value;
         render();
       } catch(err){
-        $('#cedula').classList.add('is-invalid');
-        $('#cedula-feedback').textContent = err.message;
+        document.getElementById('cedula').classList.add('is-invalid');
+        document.getElementById('cedula-feedback').textContent = err.message;
       }
     });
 
-    $('#btn-cancelar').addEventListener('click', clearForm);
+    document.getElementById('btn-cancelar').addEventListener('click', clearForm);
 
-    $('#tbody').addEventListener('click', (e)=>{
+    document.getElementById('tbody').addEventListener('click', function(e){
       const btn = e.target.closest('button[data-action]');
       if (!btn) return;
-      const id = btn.dataset.id;
-      const action = btn.dataset.action;
+      const id = btn.getAttribute('data-id');
+      const action = btn.getAttribute('data-action');
       if (action === 'edit'){
-        const v = state.items.find(x => x.id === id);
+        const v = state.items.find(function(x){ return x.id === id; });
         if (!v) return;
-        $('#id').value = v.id;
-        $('#nombre').value = v.nombre;
-        $('#cedula').value = v.cedula;
-        $('#telefono').value = v.telefono;
-        $('#municipio').value = v.municipio;
-        $('#btn-cancelar').classList.remove('d-none');
+        document.getElementById('id').value = v.id;
+        document.getElementById('nombre').value = v.nombre;
+        document.getElementById('cedula').value = v.cedula;
+        document.getElementById('telefono').value = v.telefono;
+        document.getElementById('municipio').value = v.municipio;
+        document.getElementById('btn-cancelar').classList.remove('d-none');
         scrollTo({ top: 0, behavior: 'smooth' });
       } else if (action === 'del'){
         if (confirm('¿Eliminar este registro?')){
@@ -231,34 +272,97 @@
       }
     });
 
-    $('#btn-buscar').addEventListener('click', ()=>{
-      state.filter = $('#q').value;
+    document.getElementById('btn-buscar').addEventListener('click', function(){
+      state.filter = document.getElementById('q').value;
       render();
     });
-    $('#btn-limpiar').addEventListener('click', ()=>{
-      $('#q').value = '';
+    document.getElementById('btn-limpiar').addEventListener('click', function(){
+      document.getElementById('q').value = '';
       state.filter = '';
       render();
     });
 
-    $('#cedula').addEventListener('blur', ()=>{
-      const ced = $('#cedula').value.trim();
-      const id = $('#id').value;
-      const exists = state.items.some(x => x.cedula === ced && x.id !== id);
+    // Blur cédula: duplicado
+    document.getElementById('cedula').addEventListener('blur', function(){
+      const ced = document.getElementById('cedula').value.trim();
+      const id = document.getElementById('id').value;
+      const exists = state.items.some(function(x){ return x.cedula === ced && x.id !== id; });
       if (exists){
-        $('#cedula').classList.add('is-invalid');
-        $('#cedula-feedback').textContent = 'Esta cédula ya está registrada.';
+        document.getElementById('cedula').classList.add('is-invalid');
+        document.getElementById('cedula-feedback').textContent = 'Esta cédula ya está registrada.';
       } else {
-        $('#cedula').classList.remove('is-invalid');
-        $('#cedula-feedback').textContent = 'Ingresa una cédula válida (solo dígitos, mín. 4).';
+        document.getElementById('cedula').classList.remove('is-invalid');
+        document.getElementById('cedula-feedback').textContent = 'Ingresa una cédula válida (solo dígitos, mín. 4).';
       }
     });
 
-    $('#q').addEventListener('keydown', (e)=>{
-      if (e.key === 'Enter') { e.preventDefault(); $('#btn-buscar').click(); }
+    // ===== Admin logic =====
+    async function sha256(str){
+      const enc = new TextEncoder();
+      const data = enc.encode(str);
+      const hash = await crypto.subtle.digest('SHA-256', data);
+      return Array.from(new Uint8Array(hash)).map(function(b){ return b.toString(16).padStart(2,'0'); }).join('');
+    }
+
+    function setAdmin(on){
+      isAdmin = !!on;
+      document.getElementById('admin-badge').textContent = on ? 'Admin activo' : 'Modo visitante';
+      document.getElementById('admin-badge').className = on ? 'badge text-bg-success' : 'badge text-bg-secondary';
+      document.getElementById('admin-tools').classList.toggle('d-none', !on);
+      document.getElementById('btn-admin').classList.toggle('d-none', on);
+      document.getElementById('btn-logout').classList.toggle('d-none', !on);
+      render();
+    }
+
+    var adminModal;
+    document.addEventListener('DOMContentLoaded', function(){
+      adminModal = new bootstrap.Modal('#adminModal');
     });
 
+    document.getElementById('btn-admin').addEventListener('click', function(){
+      document.getElementById('admin-pass').value='';
+      adminModal.show();
+    });
+
+    document.getElementById('btn-admin-login').addEventListener('click', async function(){
+      const pass = document.getElementById('admin-pass').value;
+      if (!pass) return;
+      const h = await sha256(pass);
+      const expected = await sha256('VOTANTES2025');
+      if (h === expected){
+        adminModal.hide();
+        setAdmin(true);
+      } else {
+        alert('Contraseña incorrecta');
+      }
+    });
+
+    document.getElementById('btn-logout').addEventListener('click', function(){ setAdmin(false); });
+
+    document.getElementById('btn-export').addEventListener('click', function(){
+      const rows = [['Nombre','Cédula','Teléfono','Municipio','Creado']].concat(
+        state.items.map(function(v){ return [v.nombre,v.cedula,v.telefono,v.municipio,v.createdAt]; })
+      );
+      const csv = rows.map(function(r){ return r.map(function(x){ return '"' + String(x).replaceAll('"','""') + '"'; }).join(','); }).join('\n');
+      const blob = new Blob([csv], {type:'text/csv;charset=utf-8;'});
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url; a.download = 'votantes.csv'; a.click();
+      URL.revokeObjectURL(url);
+    });
+
+    document.getElementById('btn-wipe').addEventListener('click', function(){
+      if (!isAdmin) return;
+      if (confirm('¿Eliminar TODOS los registros?')){
+        state.items = [];
+        persist();
+        render();
+      }
+    });
+
+    // Inicial
     render();
   </script>
+  <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
 </body>
 </html>
