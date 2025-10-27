@@ -191,7 +191,7 @@
       tbody.innerHTML = '';
       $('#contador').textContent = state.items.length;
       state.items.forEach((v, idx) => {
-        const tel = isAdmin ? v.telefono : String(v.telefono).replace(/\d(?=\d{2})/g, '•');
+        const tel = v.telefono;
         const tr = document.createElement('tr');
         tr.innerHTML = `
           <td>${idx+1}</td>
